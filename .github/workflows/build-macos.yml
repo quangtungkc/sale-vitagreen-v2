@@ -24,7 +24,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec electron-builder --mac zip --universal
+      - run: pnpm exec electron-builder --mac zip --x64 --arm64
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
