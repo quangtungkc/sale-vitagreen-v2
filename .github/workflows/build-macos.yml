@@ -1,0 +1,32 @@
+name: Build macOS application
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to attach the macOS file to
+        required: true
+        default: v2.8.0
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec electron-builder --mac zip --universal
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: release/*.zip
