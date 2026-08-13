@@ -30,7 +30,7 @@ jobs:
         continue-on-error: true
         run: |
           set -o pipefail
-          pnpm exec electron-builder --mac zip --x64 2>&1 | tee build.log
+          pnpm exec electron-builder --mac zip --x64 --publish never 2>&1 | tee build.log
       - name: Show build diagnostics
         if: steps.package.outcome == 'failure'
         run: |
