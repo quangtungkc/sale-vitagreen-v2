@@ -118,7 +118,7 @@ async function appendOrderToSheet(order, customer) {
   if (!usedRowsResponse.ok) throw new Error(`Không xác định được dòng trống trên Google Sheet: ${usedRowsBody.error?.message || `mã ${usedRowsResponse.status}`}`);
   const rowNumber = Math.max(2, (usedRowsBody.values || []).length + 1);
   const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`, {
-    method: 'PUT',
+    method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
     signal: AbortSignal.timeout(20000),
     body: JSON.stringify({
