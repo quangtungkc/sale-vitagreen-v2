@@ -104,40 +104,37 @@ async function appendOrderToSheet(order, customer) {
   if (!spreadsheetId) throw new Error(`Chưa có link VTG_lendon của sale ${order?.Owner || ''}.`);
   const accessToken = await googleAccessToken();
   const deliveryStatus = order.Status === 'Thành công' ? 'Giao thành công' : order.Status;
-  // Cột M của một số sheet là công thức/vùng bảo vệ, nên không ghi vào cột này.
-  // Ghi A:L trước, sau đó ghi N:Q vào chính dòng vừa được thêm.
+  // Cột M của một số sheet là công thức/vùng bảo vệ, nên không ghi hoặc chèn dòng qua cột này.
+  // Tìm dòng trống tiếp theo rồi chỉ ghi các cột được phép: A:L và N:Q.
   const leftRow = [[
     sheetDateValue(order.Date), customer?.Name || order.CustomerName || '', String(order.CustomerPhone || ''), customer?.Address || '',
     order.Product || '', Number(order.Quantity) || 0, '', '', '', '', deliveryStatus || 'Đã lên đơn',
     order.Type || 'Khách mới'
   ]];
-  const appendRange = encodeURIComponent('VTG_lendon!A:L');
-  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${appendRange}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`, {
-    method: 'POST',
+  const usedRowsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent('VTG_lendon!A:A')}`, {
+    headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(20000)
+  });
+  const usedRowsBody = await usedRowsResponse.json().catch(() => ({}));
+  if (!usedRowsResponse.ok) throw new Error(`Không xác định được dòng trống trên Google Sheet: ${usedRowsBody.error?.message || `mã ${usedRowsResponse.status}`}`);
+  const rowNumber = Math.max(2, (usedRowsBody.values || []).length + 1);
+  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`, {
+    method: 'PUT',
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ values: leftRow })
+    signal: AbortSignal.timeout(20000),
+    body: JSON.stringify({
+      valueInputOption: 'USER_ENTERED',
+      data: [
+        { range: `VTG_lendon!A${rowNumber}:L${rowNumber}`, values: leftRow },
+        { range: `VTG_lendon!N${rowNumber}:Q${rowNumber}`, values: [[order.Id || '', Number(order.Amount) || 0, order.Type || 'Khách mới', 'Đơn tạo từ SALE VITAGREEN V2']] }
+      ]
+    })
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     const detail = body.error?.message || `mã ${response.status}`;
     throw new Error(`Google Sheet từ chối ghi đơn: ${detail}`);
   }
-  const appendedRange = String(body.updates?.updatedRange || '');
-  const rowMatch = appendedRange.match(/!A(\d+):L\d+$/i);
-  if (!rowMatch) throw new Error('Google Sheet đã thêm đơn nhưng không xác định được dòng để hoàn tất thông tin đơn.');
-  const rowNumber = rowMatch[1];
-  const rightRange = encodeURIComponent(`VTG_lendon!N${rowNumber}:Q${rowNumber}`);
-  const rightResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${rightRange}?valueInputOption=USER_ENTERED`, {
-    method: 'PUT',
-    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ values: [[order.Id || '', Number(order.Amount) || 0, order.Type || 'Khách mới', 'Đơn tạo từ SALE VITAGREEN V2']] })
-  });
-  const rightBody = await rightResponse.json().catch(() => ({}));
-  if (!rightResponse.ok) {
-    const detail = rightBody.error?.message || `mã ${rightResponse.status}`;
-    throw new Error(`Google Sheet đã thêm dòng nhưng chưa hoàn tất mã đơn/giá trị: ${detail}`);
-  }
-  return { ok: true, range: rightBody.updatedRange || appendedRange };
+  return { ok: true, range: `VTG_lendon!A${rowNumber}:Q${rowNumber}` };
 }
 async function cancelOrderInSheet(order) {
   const spreadsheetId = sourceIdForOwner(order?.Owner);
