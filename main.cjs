@@ -4,6 +4,9 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
+// Gateway chạy dưới tài khoản Google của quản trị; máy sale không cần tệp khóa Service Account.
+const GOOGLE_SHEET_GATEWAY_URL = 'https://script.google.com/macros/s/AKfycby3ArNT102C2pG_Xk6q4ZWMdhW_2LA49vKu4KLOuUYpnU5hqLa8ix4zF7-cCoJ0JVI/exec';
+
 const dataPath = path.join(process.env.LOCALAPPDATA, 'SALE VITAGREEN V2', 'sale-data.json');
 function emptyData() {
   return {
@@ -99,7 +102,7 @@ function sheetDateValue(date) {
   const match = String(date || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
   return match ? `${match[3]}/${match[2]}/${match[1]}` : String(date || '');
 }
-async function appendOrderToSheet(order, customer) {
+async function appendOrderToSheetDirect(order, customer) {
   const spreadsheetId = sourceIdForOwner(order?.Owner);
   if (!spreadsheetId) throw new Error(`Chưa có link VTG_lendon của sale ${order?.Owner || ''}.`);
   const accessToken = await googleAccessToken();
@@ -136,7 +139,7 @@ async function appendOrderToSheet(order, customer) {
   }
   return { ok: true, range: `VTG_lendon!A${rowNumber}:Q${rowNumber}` };
 }
-async function cancelOrderInSheet(order) {
+async function cancelOrderInSheetDirect(order) {
   const spreadsheetId = sourceIdForOwner(order?.Owner);
   if (!spreadsheetId) throw new Error(`Chưa có link VTG_lendon của sale ${order?.Owner || ''}.`);
   if (!order?.Id) throw new Error('Đơn hàng chưa có mã đơn để đối chiếu trên Google Sheet.');
@@ -158,6 +161,28 @@ async function cancelOrderInSheet(order) {
   const updateBody = await update.json().catch(() => ({}));
   if (!update.ok) throw new Error(`Google Sheet từ chối hủy đơn: ${updateBody.error?.message || `mã ${update.status}`}`);
   return { ok: true, range: updateBody.updatedRange || `VTG_lendon!K${rowIndex}` };
+}
+async function sendGatewayRequest(action, order, customer, session) {
+  if (!session?.username || !session?.password) {
+    throw new Error('Phiên đăng nhập không hợp lệ. Hãy đăng xuất và đăng nhập lại.');
+  }
+  const response = await fetch(GOOGLE_SHEET_GATEWAY_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, order, customer, session }),
+    signal: AbortSignal.timeout(30000)
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || !body.ok) {
+    throw new Error(body.error || `Gateway không phản hồi hợp lệ (mã ${response.status}).`);
+  }
+  return body;
+}
+async function appendOrderToSheet(order, customer, session) {
+  return sendGatewayRequest('append-order', order, customer, session);
+}
+async function cancelOrderInSheet(order, session) {
+  return sendGatewayRequest('cancel-order', order, {}, session);
 }
 const sources = [
   ['Thu','1l0T4TKTQsSGOKntxeDqK8UJV6khh2Taka50ou35mFSY'], ['Chang','1-CA2qhRN2S4eDXuCV-znuDByfyStK7Tt_y9dOdqbph4'],
@@ -233,8 +258,8 @@ function createWindow() {
 ipcMain.handle('app:data', () => readData());
 ipcMain.handle('app:save', (_, data) => writeData(data));
 ipcMain.handle('app:sync-google', () => syncGoogle());
-ipcMain.handle('app:append-order-sheet', (_, order, customer) => appendOrderToSheet(order, customer));
-ipcMain.handle('app:cancel-order-sheet', (_, order) => cancelOrderInSheet(order));
+ipcMain.handle('app:append-order-sheet', (_, order, customer, session) => appendOrderToSheet(order, customer, session));
+ipcMain.handle('app:cancel-order-sheet', (_, order, session) => cancelOrderInSheet(order, session));
 ipcMain.handle('app:sync-report-sale', (_, owner) => syncReportSale(owner));
 ipcMain.handle('app:check-update', () => checkUpdate());
 ipcMain.handle('app:install-update', () => installUpdate());
