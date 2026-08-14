@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('vitagreen', {
   saveData: (data) => ipcRenderer.invoke('app:save', data),
   syncGoogle: () => ipcRenderer.invoke('app:sync-google'),
   appendOrderToSheet: (order, customer) => ipcRenderer.invoke('app:append-order-sheet', order, customer),
+  cancelOrderInSheet: (order) => ipcRenderer.invoke('app:cancel-order-sheet', order),
   syncReportSale: (owner) => ipcRenderer.invoke('app:sync-report-sale', owner),
   checkUpdate: () => ipcRenderer.invoke('app:check-update'),
   installUpdate: () => ipcRenderer.invoke('app:install-update'),

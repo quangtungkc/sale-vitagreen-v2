@@ -123,6 +123,29 @@ async function appendOrderToSheet(order, customer) {
   }
   return { ok: true, range: body.updates?.updatedRange || 'VTG_lendon' };
 }
+async function cancelOrderInSheet(order) {
+  const spreadsheetId = sourceIdForOwner(order?.Owner);
+  if (!spreadsheetId) throw new Error(`Chưa có link VTG_lendon của sale ${order?.Owner || ''}.`);
+  if (!order?.Id) throw new Error('Đơn hàng chưa có mã đơn để đối chiếu trên Google Sheet.');
+  const accessToken = await googleAccessToken();
+  const codeRange = encodeURIComponent('VTG_lendon!N:N');
+  const lookup = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${codeRange}`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  const lookupBody = await lookup.json().catch(() => ({}));
+  if (!lookup.ok) throw new Error(`Không đọc được mã đơn trên Google Sheet: ${lookupBody.error?.message || `mã ${lookup.status}`}`);
+  const rowIndex = (lookupBody.values || []).findIndex(row => String(row?.[0] || '').trim() === String(order.Id).trim()) + 1;
+  if (!rowIndex) throw new Error(`Không tìm thấy mã đơn ${order.Id} trong VTG_lendon.`);
+  const statusRange = encodeURIComponent(`VTG_lendon!K${rowIndex}`);
+  const update = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${statusRange}?valueInputOption=USER_ENTERED`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ values: [['Hủy']] })
+  });
+  const updateBody = await update.json().catch(() => ({}));
+  if (!update.ok) throw new Error(`Google Sheet từ chối hủy đơn: ${updateBody.error?.message || `mã ${update.status}`}`);
+  return { ok: true, range: updateBody.updatedRange || `VTG_lendon!K${rowIndex}` };
+}
 const sources = [
   ['Thu','1l0T4TKTQsSGOKntxeDqK8UJV6khh2Taka50ou35mFSY'], ['Chang','1-CA2qhRN2S4eDXuCV-znuDByfyStK7Tt_y9dOdqbph4'],
   ['Lương','1CJrdWnA291kYg9kgq_P9Xa_QfA4T0TTkVEIm7w46Nsk'], ['Phương','1SOeryGnc-8y-_QOFWkTxrmRYY0ui_BXGgA5dFPLYhSo'],
@@ -198,6 +221,7 @@ ipcMain.handle('app:data', () => readData());
 ipcMain.handle('app:save', (_, data) => writeData(data));
 ipcMain.handle('app:sync-google', () => syncGoogle());
 ipcMain.handle('app:append-order-sheet', (_, order, customer) => appendOrderToSheet(order, customer));
+ipcMain.handle('app:cancel-order-sheet', (_, order) => cancelOrderInSheet(order));
 ipcMain.handle('app:sync-report-sale', (_, owner) => syncReportSale(owner));
 ipcMain.handle('app:check-update', () => checkUpdate());
 ipcMain.handle('app:install-update', () => installUpdate());
