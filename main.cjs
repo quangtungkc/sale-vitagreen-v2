@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 
 const dataPath = path.join(process.env.LOCALAPPDATA, 'SALE VITAGREEN V2', 'sale-data.json');
@@ -42,6 +43,85 @@ function writeData(data) {
   fs.mkdirSync(path.dirname(dataPath), { recursive: true });
   fs.writeFileSync(dataPath, JSON.stringify(normalizeData(data), null, 2), 'utf8');
   return { ok: true };
+}
+function googleCredentialPath() {
+  if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
+    return path.join(process.env.LOCALAPPDATA, 'SALE VITAGREEN V2', 'google-service-account.json');
+  }
+  return path.join(app.getPath('userData'), 'google-service-account.json');
+}
+function sourceIdForOwner(owner) {
+  return sources.find(([name]) => flat(name) === flat(owner))?.[1];
+}
+function base64Url(value) {
+  return Buffer.from(value).toString('base64url');
+}
+async function googleAccessToken() {
+  const credentialFile = googleCredentialPath();
+  if (!fs.existsSync(credentialFile)) {
+    throw new Error(`Chưa có khóa Google Service Account tại ${credentialFile}. Đơn chưa được ghi lên Sheet.`);
+  }
+  let credential;
+  try {
+    credential = JSON.parse(fs.readFileSync(credentialFile, 'utf8').replace(/^\uFEFF/, ''));
+  } catch (_) {
+    throw new Error('Tệp khóa Google Service Account không hợp lệ. Đơn chưa được ghi lên Sheet.');
+  }
+  if (!credential.client_email || !credential.private_key) {
+    throw new Error('Tệp khóa Google Service Account thiếu client_email hoặc private_key.');
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const header = base64Url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const claim = base64Url(JSON.stringify({
+    iss: credential.client_email,
+    scope: 'https://www.googleapis.com/auth/spreadsheets',
+    aud: 'https://oauth2.googleapis.com/token',
+    iat: now,
+    exp: now + 3600
+  }));
+  const unsigned = `${header}.${claim}`;
+  const signature = crypto.createSign('RSA-SHA256').update(unsigned).end().sign(credential.private_key, 'base64url');
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion: `${unsigned}.${signature}`
+    })
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || !body.access_token) {
+    throw new Error(`Không xác thực được Google Service Account${body.error_description ? `: ${body.error_description}` : '.'}`);
+  }
+  return body.access_token;
+}
+function sheetDateValue(date) {
+  const match = String(date || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : String(date || '');
+}
+async function appendOrderToSheet(order, customer) {
+  const spreadsheetId = sourceIdForOwner(order?.Owner);
+  if (!spreadsheetId) throw new Error(`Chưa có link VTG_lendon của sale ${order?.Owner || ''}.`);
+  const accessToken = await googleAccessToken();
+  const deliveryStatus = order.Status === 'Thành công' ? 'Giao thành công' : order.Status;
+  const row = [[
+    sheetDateValue(order.Date), customer?.Name || order.CustomerName || '', String(order.CustomerPhone || ''), customer?.Address || '',
+    order.Product || '', Number(order.Quantity) || 0, '', '', '', '', deliveryStatus || 'Đã lên đơn',
+    order.Type || 'Khách mới', order.Product || '', order.Id || '', Number(order.Amount) || 0,
+    order.Type || 'Khách mới', `Đơn tạo từ SALE VITAGREEN V2`
+  ]];
+  const range = encodeURIComponent('VTG_lendon!A:Q');
+  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ values: row })
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = body.error?.message || `mã ${response.status}`;
+    throw new Error(`Google Sheet từ chối ghi đơn: ${detail}`);
+  }
+  return { ok: true, range: body.updates?.updatedRange || 'VTG_lendon' };
 }
 const sources = [
   ['Thu','1l0T4TKTQsSGOKntxeDqK8UJV6khh2Taka50ou35mFSY'], ['Chang','1-CA2qhRN2S4eDXuCV-znuDByfyStK7Tt_y9dOdqbph4'],
@@ -117,6 +197,7 @@ function createWindow() {
 ipcMain.handle('app:data', () => readData());
 ipcMain.handle('app:save', (_, data) => writeData(data));
 ipcMain.handle('app:sync-google', () => syncGoogle());
+ipcMain.handle('app:append-order-sheet', (_, order, customer) => appendOrderToSheet(order, customer));
 ipcMain.handle('app:sync-report-sale', (_, owner) => syncReportSale(owner));
 ipcMain.handle('app:check-update', () => checkUpdate());
 ipcMain.handle('app:install-update', () => installUpdate());
