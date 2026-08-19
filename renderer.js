@@ -79,6 +79,38 @@ function bindAccessEvents(){$('#customer-search').oninput=()=>renderCustomers();
 setTimeout(activateAccessControl,0);
 setTimeout(bindAccessEvents,0);
 setTimeout(startLogin,0);
+// Gắn trực tiếp thao tác cho lịch hẹn để không bị ảnh hưởng bởi các sự kiện điều hướng chung.
+const renderCarePageWithFollowupActions=renderCarePage;
+renderCarePage=function(tab='customers'){
+  renderCarePageWithFollowupActions(tab);
+  if(tab!=='scheduled')return;
+  document.querySelectorAll('.care-save-follow').forEach(button=>button.onclick=event=>{
+    event.preventDefault();
+    event.stopPropagation();
+    const index=+button.dataset.i;
+    const rows=[...(data.FollowUps||[])].sort((a,b)=>a.Due.localeCompare(b.Due));
+    const task=rows[index];
+    const status=document.querySelector(`.follow-status[data-i="${index}"]`)?.value;
+    if(!task||!status)return toast('Không tìm thấy lịch hẹn cần cập nhật.');
+    task.Status=status;
+    save('Đã lưu trạng thái chăm sóc.');
+    renderCarePage('scheduled');
+    renderDashboard();
+  });
+  document.querySelectorAll('.care-delete-follow').forEach(button=>button.onclick=event=>{
+    event.preventDefault();
+    event.stopPropagation();
+    const index=+button.dataset.i;
+    const rows=[...(data.FollowUps||[])].sort((a,b)=>a.Due.localeCompare(b.Due));
+    const task=rows[index];
+    if(!task)return toast('Không tìm thấy lịch hẹn cần xóa.');
+    if(!confirm(`Xóa lịch hẹn chăm sóc của ${task.CustomerName}?`))return;
+    data.FollowUps=data.FollowUps.filter(item=>item.Id!==task.Id);
+    save('Đã xóa lịch hẹn chăm sóc.');
+    renderCarePage('scheduled');
+    renderDashboard();
+  });
+};
 async function init(){data=await window.vitagreen.getData();$('#sale').innerHTML='<option>Tất cả</option>'+SALE_NAMES.map(x=>`<option>${x}</option>`).join('');const dates=(data.Orders||[]).map(x=>x.Date).filter(Boolean).sort(),latest=dates[dates.length-1]||today();$('#from').value=dates[0]||latest;$('#to').value=latest;renderDashboard();renderCustomers();renderOrders();renderFollowups()}
 async function syncFromSheet(){try{toast('Đang đồng bộ dữ liệu từ Google Sheet...');const r=await window.vitagreen.syncGoogle();await init();toast(`Đã đồng bộ ${r.orders} đơn từ ${r.sales} link sale.${r.failed?` ${r.failed} sheet chưa đọc được.`:''}`)}catch(e){toast('Đồng bộ không thành công: '+(e.message||'Vui lòng kiểm tra Internet và quyền xem Sheet.'))}}
 function showCustomerProfile(phone){const customer=data.Customers.find(x=>x.Phone===phone);if(!customer)return;const orders=data.Orders.filter(x=>x.CustomerPhone===phone).sort((a,b)=>b.Date.localeCompare(a.Date));const total=sum(orders,'Amount');$('#modal-title').textContent=`Hồ sơ khách hàng – ${customer.Name}`;$('#modal-form').innerHTML=`<div class="customer-profile-summary"><p><b>Số điện thoại:</b> ${customer.Phone}</p><p><b>Sale phụ trách:</b> ${customer.Owner||'—'}</p><p><b>Tổng số đơn:</b> ${orders.length} · <b>Tổng giá trị:</b> ${money(total)}</p></div><h3>Lịch sử đơn hàng</h3><div class="table-wrap"><table><tr><th>Ngày</th><th>Sản phẩm</th><th>SL</th><th>Giá trị</th><th>Loại khách</th><th>Trạng thái</th></tr>${orders.length?orders.map(o=>`<tr><td>${o.Date.split('-').reverse().join('/')}</td><td>${o.Product||'—'}</td><td>${o.Quantity||'—'}</td><td class="money">${money(o.Amount)}</td><td>${o.Type||'—'}</td><td>${o.Status||'—'}</td></tr>`).join(''):'<tr><td colspan="6" class="history-empty">Khách chưa có đơn hàng.</td></tr>'}</table></div><div class="report-form-actions"><button type="button" class="primary" id="create-order-for-customer">+ Tạo đơn hàng</button><button type="button" id="close-customer-profile">Đóng</button></div>`;$('#modal').classList.remove('hidden');$('#close-customer-profile').onclick=()=>$('#modal').classList.add('hidden');$('#create-order-for-customer').onclick=()=>openOrderForCustomer(customer)}
