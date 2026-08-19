@@ -83,6 +83,18 @@ setTimeout(startLogin,0);
 const renderCarePageWithFollowupActions=renderCarePage;
 renderCarePage=function(tab='customers'){
   renderCarePageWithFollowupActions(tab);
+  if(tab==='customers'){
+    const filter=$('#care-purchase-filter');
+    if(!filter)return;
+    ['pointerdown','mousedown','click'].forEach(type=>filter.addEventListener(type,event=>event.stopPropagation()));
+    const applyFilter=()=>{
+      window.carePurchaseFilter=filter.value;
+      renderCarePage('customers');
+    };
+    filter.onchange=applyFilter;
+    filter.oninput=applyFilter;
+    return;
+  }
   if(tab!=='scheduled')return;
   document.querySelectorAll('.care-save-follow').forEach(button=>button.onclick=event=>{
     event.preventDefault();
