@@ -191,6 +191,14 @@ const sources = [
   ['Tuyết','1ATC0glShD5jtmf7eE8KmtBUSHnI5a6uYw5OP70IGVPg']
 ];
 const flat = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+// Quy tắc báo cáo đội sale: Khách tối/CN được tính vào nhóm khách mới.
+// Không suy diễn nhãn trống thành khách mới để tránh làm sai doanh thu.
+function customerType(value) {
+  const label = flat(value);
+  if (label.includes('moi') || label.includes('toi') || label === 'cn') return 'Khách mới';
+  if (label.includes('cu') || label.includes('mua lai')) return 'Khách cũ';
+  return 'Chưa phân loại';
+}
 const cell = (row, index) => row.c?.[index]?.f ?? row.c?.[index]?.v ?? '';
 function sheetDate(row) { const raw=String(row.c?.[0]?.v || ''), shown=String(cell(row,0)); let m=raw.match(/^Date\((\d+),(\d+),(\d+)/); if(m) return `${m[1]}-${String(+m[2]+1).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`; m=shown.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?$/); return m ? `${m[3]||2026}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}` : null; }
 function amount(row) { const value=row.c?.[14]?.v; if(typeof value==='number') return value; return Number(String(cell(row,14)).replace(/\D/g,'')) || 0; }
@@ -200,12 +208,12 @@ async function readSource(owner, id) {
   const response=await fetch(url,{signal:AbortSignal.timeout(15000)}); if(!response.ok) throw new Error(`Không đọc được Sheet ${owner}`); const body=await response.text(), match=body.match(/\{[\s\S]*\}/); if(!match) throw new Error(`Không đọc được Sheet ${owner}`);
   const grid=JSON.parse(match[0]); const orders=[];
   for(const row of grid.table.rows || []) { const date=sheetDate(row); if(!date || date<'2026-01-01') continue; const idOrder=String(cell(row,13)).trim(); if(!idOrder) continue;
-    const statusText=flat(cell(row,10)), classText=flat(cell(row,11)) || flat(cell(row,15));
+    const statusText=flat(cell(row,10)), classText=cell(row,11);
     const status=statusText.includes('huy')?'Hủy':statusText.includes('hoan')?'Hoàn':statusText.includes('thanh cong')?'Thành công':statusText.includes('len don')?'Đã lên đơn':String(cell(row,10)).trim()||'Chờ xử lý';
-    orders.push({Id:idOrder,CustomerName:String(cell(row,1)),CustomerPhone:String(cell(row,2)).replace(/\D/g,''),Owner:owner,Product:String(cell(row,4)),Quantity:String(cell(row,5)),Amount:amount(row),Date:date,Status:status,Type:classText.includes('cu')||classText.includes('mua lai')||classText.includes('toi')?'Khách cũ':'Khách mới',ImportedFrom:`VTG_lendon | ${id}`});
+    orders.push({Id:idOrder,CustomerName:String(cell(row,1)),CustomerPhone:String(cell(row,2)).replace(/\D/g,''),Owner:owner,Product:String(cell(row,4)),Quantity:String(cell(row,5)),Amount:amount(row),Date:date,Status:status,Type:customerType(classText),ImportedFrom:`VTG_lendon | ${id}`});
   } return orders;
 }
-function buildSummary(orders) { const daily=[], bySale=[], owners=['Thu','Chang','Lương','Phương','Thùy','Mỹ Anh','Tuyết'], dates=orders.map(o=>o.Date).filter(Boolean).sort(), start=dates[0]||new Date().toISOString().slice(0,10), end=dates[dates.length-1]||start; for(let time=new Date(`${start}T00:00:00Z`).getTime();time<=new Date(`${end}T00:00:00Z`).getTime();time+=86400000){const date=new Date(time).toISOString().slice(0,10); for(const owner of [null,...owners]){const rows=orders.filter(o=>o.Date===date&&(!owner||o.Owner===owner)), returns=rows.filter(o=>o.Status==='Hoàn'||o.Status==='Hủy'), valid=rows.filter(o=>o.Status!=='Hoàn'&&o.Status!=='Hủy'), fresh=valid.filter(o=>o.Type==='Khách mới'), old=valid.filter(o=>o.Type==='Khách cũ'); const item={Date:date,Data:null,NewOrders:fresh.length,OldOrders:old.length,NewRevenue:total(fresh,'Amount'),OldRevenue:total(old,'Amount'),ReturnCount:returns.length,ReturnRevenue:total(returns,'Amount'),NetRevenue:total(valid,'Amount'),OrderCount:valid.length}; if(owner) bySale.push({...item,Owner:owner}); else daily.push(item); }} return {Source:'VTG_lendon – đồng bộ đọc-only',DataNote:'Chỉ đọc dữ liệu từ các link sale; không ghi hay sửa Google Sheet.',LastImportedAt:new Date().toISOString(),Daily:daily,BySale:bySale}; }
+function buildSummary(orders) { const daily=[], bySale=[], owners=['Thu','Chang','Lương','Phương','Thùy','Mỹ Anh','Tuyết'], dates=orders.map(o=>o.Date).filter(Boolean).sort(), start=dates[0]||new Date().toISOString().slice(0,10), end=dates[dates.length-1]||start; for(let time=new Date(`${start}T00:00:00Z`).getTime();time<=new Date(`${end}T00:00:00Z`).getTime();time+=86400000){const date=new Date(time).toISOString().slice(0,10); for(const owner of [null,...owners]){const rows=orders.filter(o=>o.Date===date&&(!owner||o.Owner===owner)), returns=rows.filter(o=>o.Status==='Hoàn'||o.Status==='Hủy'), valid=rows.filter(o=>o.Status!=='Hoàn'&&o.Status!=='Hủy'), fresh=rows.filter(o=>o.Type==='Khách mới'), old=rows.filter(o=>o.Type==='Khách cũ'); const item={Date:date,Data:null,NewOrders:fresh.length,OldOrders:old.length,NewRevenue:total(fresh,'Amount'),OldRevenue:total(old,'Amount'),ReturnCount:returns.length,ReturnRevenue:total(returns,'Amount'),NetRevenue:total(valid,'Amount'),OrderCount:rows.length}; if(owner) bySale.push({...item,Owner:owner}); else daily.push(item); }} return {Source:'VTG_lendon – đồng bộ đọc-only',DataNote:'Doanh thu khách mới/cũ là doanh thu gộp theo nhãn VTG_lendon; doanh thu sau hoàn được tính riêng.',LastImportedAt:new Date().toISOString(),Daily:daily,BySale:bySale}; }
 async function syncGoogle() {
   const results = await Promise.allSettled(sources.map(([owner, id]) => readSource(owner, id)));
   const failed = results.filter(result => result.status === 'rejected');
@@ -217,7 +225,12 @@ async function syncGoogle() {
   const data = readData();
   const sourceOwners = new Set([...sources.map(x => x[0]), 'Thủy']);
   const existingCustomers = new Map(data.Customers.map(c => [c.Phone, c]));
-  data.Orders = [...data.Orders.filter(o => !(o.ImportedFrom && sourceOwners.has(o.Owner))), ...imported];
+  // VTG_lendon là nguồn doanh thu chính. Chỉ giữ lại đơn app đang chờ gửi;
+  // đơn đã gửi thành công sẽ được thay bằng bản đọc lại từ Sheet để không bị cộng hai lần.
+  const pendingLocalOrders = data.Orders.filter(o =>
+    !sourceOwners.has(o.Owner) || (!o.ImportedFrom && o.PendingSync === true)
+  );
+  data.Orders = [...pendingLocalOrders, ...imported];
   const phones = new Set();
   data.Customers = data.Orders.sort((a,b) => a.Date.localeCompare(b.Date)).filter(o => o.CustomerPhone && !phones.has(o.CustomerPhone) && (phones.add(o.CustomerPhone), true)).map(o => ({ ...existingCustomers.get(o.CustomerPhone), Id: `KH-${o.CustomerPhone}`, Name: o.CustomerName, Phone: o.CustomerPhone, Owner: o.Owner, Source: 'VTG_lendon', Note: existingCustomers.get(o.CustomerPhone)?.Note || '', Created: o.Date }));
   data.ExternalSummary = buildSummary(data.Orders);
