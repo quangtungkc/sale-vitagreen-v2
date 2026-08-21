@@ -1,6 +1,6 @@
 {
   "name": "sale-vitagreen-v2-desktop",
-  "version": "2.9.5",
+  "version": "2.9.6",
   "description": "Ứng dụng desktop CRM và KPI SALE VITAGREEN V2",
   "main": "main.cjs",
   "scripts": {

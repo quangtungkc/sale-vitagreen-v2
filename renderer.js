@@ -65,8 +65,18 @@ const SALE_LOGIN_ACCOUNTS=[{username:'Luonggia',password:'giaketao',owner:'L\u01
 document.addEventListener('submit',event=>{if(!['sale-login','admin-login'].includes(event.target.id))return;const values=Object.fromEntries(new FormData(event.target));const session={username:values.username,password:values.password};setTimeout(()=>{if(window.currentUser)window.currentUser.gatewaySession=session},0)},true);
 const gatewayAppendOrder=window.vitagreen.appendOrderToSheet;
 const gatewayCancelOrder=window.vitagreen.cancelOrderInSheet;
-window.vitagreen.appendOrderToSheet=(order,customer,session)=>gatewayAppendOrder(order,customer,session||window.currentUser?.gatewaySession);
-window.vitagreen.cancelOrderInSheet=(order,session)=>gatewayCancelOrder(order,session||window.currentUser?.gatewaySession);
+function currentGatewaySession(){
+  const saved=window.currentUser?.gatewaySession;
+  if(saved?.username&&saved?.password)return saved;
+  if(window.currentUser?.role==='sale'){
+    const account=SALE_LOGIN_ACCOUNTS.find(item=>item.owner===window.currentUser.owner);
+    if(account)return {username:account.username,password:account.password};
+  }
+  if(window.currentUser?.role==='admin')return {username:'admin',password:'Tungdeptrai'};
+  return null;
+}
+window.vitagreen.appendOrderToSheet=(order,customer,session)=>gatewayAppendOrder(order,customer,session||currentGatewaySession());
+window.vitagreen.cancelOrderInSheet=(order,session)=>gatewayCancelOrder(order,session||currentGatewaySession());
 window.activeSaleScope=null;
 function currentSaleOwner(){return window.activeSaleScope||(window.currentUser?.role==='sale'?window.currentUser.owner:null)}
 function permittedOwner(owner){const mine=currentSaleOwner();return !mine||flat(owner)===flat(mine)}
