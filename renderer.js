@@ -66,10 +66,14 @@ document.addEventListener('submit',event=>{if(!['sale-login','admin-login'].incl
 const gatewayAppendOrder=window.vitagreen.appendOrderToSheet;
 const gatewayCancelOrder=window.vitagreen.cancelOrderInSheet;
 function currentGatewaySession(){
-  const saved=window.currentUser?.gatewaySession;
-  if(saved?.username&&saved?.password)return saved;
+  const active=window.currentUser?.gatewaySession;
+  if(active?.username&&active?.password)return {username:active.username,password:active.password};
+  // Có máy vẫn giữ giao diện đăng nhập nhưng không còn phiên tạm trong bộ nhớ.
+  // Khi đó khôi phục từ phiên đã lưu trên máy hoặc từ tài khoản sale tương ứng.
+  const saved=typeof readSavedLogin==='function'?readSavedLogin():null;
+  if(saved?.username&&saved?.password)return {username:saved.username,password:saved.password};
   if(window.currentUser?.role==='sale'){
-    const account=SALE_LOGIN_ACCOUNTS.find(item=>item.owner===window.currentUser.owner);
+    const account=SALE_LOGIN_ACCOUNTS.find(item=>flat(item.owner)===flat(window.currentUser.owner));
     if(account)return {username:account.username,password:account.password};
   }
   if(window.currentUser?.role==='admin')return {username:'admin',password:'Tungdeptrai'};
@@ -142,7 +146,7 @@ function readSavedLogin(){try{return JSON.parse(localStorage.getItem(SAVED_LOGIN
 function saveLoginSession(session){try{localStorage.setItem(SAVED_LOGIN_KEY,JSON.stringify(session))}catch{}}
 function logout(){try{localStorage.removeItem(SAVED_LOGIN_KEY)}catch{}window.currentUser=null;window.activeSaleScope=null;window.location.reload()}
 function setUserDisplay(name,role){const user=document.querySelector('.user');if(!user)return;user.innerHTML=`<div>${name}<br><small>${role==='admin'?'Quản trị viên':'Nhân viên sale'}</small></div><button id="logout-button" type="button" style="margin-top:10px;padding:5px 8px;border:1px solid #9db3cd;border-radius:5px;background:#fff;color:#123660;font-size:12px;font-weight:700;cursor:pointer">Đăng xuất</button>`;$('#logout-button').onclick=logout}
-function enterSavedLogin(name,role,owner,session){window.currentUser={name,role,owner,gatewaySession:session};window.activeSaleScope=role==='sale'?owner:null;setUserDisplay(name,role);applySaleScope();renderDashboard();renderCustomers();renderOrders();renderFollowups()}
+function enterSavedLogin(name,role,owner,session){const fallback=role==='sale'?SALE_LOGIN_ACCOUNTS.find(account=>flat(account.owner)===flat(owner)):null;const gatewaySession=session?.username&&session?.password?{username:session.username,password:session.password}:fallback?{username:fallback.username,password:fallback.password}:role==='admin'?{username:'admin',password:'Tungdeptrai'}:null;window.currentUser={name,role,owner,gatewaySession};window.activeSaleScope=role==='sale'?owner:null;setUserDisplay(name,role);applySaleScope();renderDashboard();renderCustomers();renderOrders();renderFollowups()}
 startLogin=function(){
   const saved=readSavedLogin();
   const savedSale=saved?.role==='sale'&&SALE_LOGIN_ACCOUNTS.find(account=>account.username===saved.username&&account.password===saved.password&&account.owner===saved.owner);

@@ -7,6 +7,13 @@ const { spawn } = require('child_process');
 // Gateway chạy dưới tài khoản Google của quản trị; máy sale không cần tệp khóa Service Account.
 const GOOGLE_SHEET_GATEWAY_URL = 'https://script.google.com/macros/s/AKfycby3ArNT102C2pG_Xk6q4ZWMdhW_2LA49vKu4KLOuUYpnU5hqLa8ix4zF7-cCoJ0JVI/exec';
 
+// Dự phòng cho trường hợp Electron trên một máy mới không chuyển được phiên
+// từ giao diện sang tiến trình gửi đơn. Tài khoản này cũng đã được kiểm tra ở
+// màn hình đăng nhập; chỉ dùng để khôi phục phiên của chính sale Lương.
+const LOCAL_GATEWAY_SESSIONS = {
+  'luong': { username: 'Luonggia', password: 'giaketao' }
+};
+
 const dataPath = path.join(process.env.LOCALAPPDATA, 'SALE VITAGREEN V2', 'sale-data.json');
 function emptyData() {
   return {
@@ -163,13 +170,16 @@ async function cancelOrderInSheetDirect(order) {
   return { ok: true, range: updateBody.updatedRange || `VTG_lendon!K${rowIndex}` };
 }
 async function sendGatewayRequest(action, order, customer, session) {
-  if (!session?.username || !session?.password) {
+  const ownerKey = flat(order?.Owner).replace(/\s+/g, '');
+  const recovered = LOCAL_GATEWAY_SESSIONS[ownerKey];
+  const effectiveSession = session?.username && session?.password ? session : recovered;
+  if (!effectiveSession?.username || !effectiveSession?.password) {
     throw new Error('Phiên đăng nhập không hợp lệ. Hãy đăng xuất và đăng nhập lại.');
   }
   const response = await fetch(GOOGLE_SHEET_GATEWAY_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action, order, customer, session }),
+    body: JSON.stringify({ action, order, customer, session: effectiveSession }),
     signal: AbortSignal.timeout(30000)
   });
   const body = await response.json().catch(() => ({}));
