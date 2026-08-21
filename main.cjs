@@ -213,9 +213,91 @@ async function readSource(owner, id) {
     orders.push({Id:idOrder,CustomerName:String(cell(row,1)),CustomerPhone:String(cell(row,2)).replace(/\D/g,''),Owner:owner,Product:String(cell(row,4)),Quantity:String(cell(row,5)),Amount:amount(row),Date:date,Status:status,Type:customerType(classText),ImportedFrom:`VTG_lendon | ${id}`});
   } return orders;
 }
+// Ba tab này là data chăm sóc riêng của Lương, không phải nguồn doanh thu.
+// Chỉ đọc tên/SĐT/ghi chú để đưa vào CRM; tuyệt đối không dùng chúng để tính KPI.
+const luongCareSources = [
+  { sheet: 'Data Hương', noteIndex: 15, addressIndex: 6 },
+  { sheet: 'cop số', noteIndex: 14, addressIndex: 5 },
+  { sheet: 'cop số 2', noteIndex: 14, addressIndex: 5 }
+];
+const valueAt = (row, index) => String(row.c?.[index]?.f ?? row.c?.[index]?.v ?? '').trim();
+function careDate(value) {
+  const text = String(value || '').trim();
+  let match = text.match(/^Date\((\d+),(\d+),(\d+)/);
+  if (match) return `${match[1]}-${String(+match[2] + 1).padStart(2, '0')}-${String(match[3]).padStart(2, '0')}`;
+  match = text.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?$/);
+  return match ? `${match[3] || 2026}-${String(match[2]).padStart(2, '0')}-${String(match[1]).padStart(2, '0')}` : '2020-01-01';
+}
+async function readLuongCareSource(source) {
+  const id = sourceIdForOwner('Lương');
+  const url = `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(source.sheet)}`;
+  const response = await fetch(url, { signal: AbortSignal.timeout(20000) });
+  if (!response.ok) throw new Error(`Không đọc được tab ${source.sheet} của Lương.`);
+  const body = await response.text();
+  const match = body.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error(`Không đọc được tab ${source.sheet} của Lương.`);
+  const grid = JSON.parse(match[0]);
+  const contacts = [];
+  (grid.table.rows || []).forEach((row, index) => {
+    const name = valueAt(row, 1);
+    const phone = valueAt(row, 2).replace(/\D/g, '');
+    if (!name || phone.length < 8) return;
+    contacts.push({
+      Name: name, Phone: phone, Date: careDate(valueAt(row, 0)), Source: source.sheet,
+      Row: index + 2, LeadSource: valueAt(row, 3), Address: valueAt(row, source.addressIndex),
+      Note: valueAt(row, source.noteIndex)
+    });
+  });
+  return contacts;
+}
+function mergeLuongCareData(data, existingCustomers, careRows) {
+  const byPhone = new Map(data.Customers.map(customer => [String(customer.Phone), customer]));
+  const latestByPhone = new Map();
+  for (const row of careRows) {
+    const current = latestByPhone.get(row.Phone);
+    if (!current || row.Date > current.Date || (row.Date === current.Date && row.Row >= current.Row)) latestByPhone.set(row.Phone, row);
+  }
+  let addedCustomers = 0;
+  for (const contact of latestByPhone.values()) {
+    const customer = byPhone.get(contact.Phone);
+    // Không cướp quyền sở hữu khách đã thuộc sale khác trong dữ liệu đơn hàng.
+    if (customer && customer.Owner && flat(customer.Owner) !== flat('Lương')) continue;
+    if (customer) {
+      customer.Owner = 'Lương';
+      customer.CareImportedDate = contact.Date;
+      customer.CareSource = contact.Source;
+      if (!customer.Note && contact.Note) customer.Note = contact.Note;
+      if (!customer.Address && contact.Address) customer.Address = contact.Address;
+    } else {
+      const old = existingCustomers.get(contact.Phone);
+      if (old && old.Owner && flat(old.Owner) !== flat('Lương')) continue;
+      const created = {
+        ...(old || {}), Id: old?.Id || `KH-${contact.Phone}`, Name: contact.Name, Phone: contact.Phone,
+        Owner: 'Lương', Source: 'Chăm sóc Lương', Note: old?.Note || contact.Note || '',
+        Address: old?.Address || contact.Address || '', Created: old?.Created || '2020-01-01',
+        CareImportedOnly: true, CareImportedDate: contact.Date, CareSource: contact.Source
+      };
+      data.Customers.push(created);
+      byPhone.set(contact.Phone, created);
+      addedCustomers++;
+    }
+  }
+  const noteIds = new Set((data.CustomerNotes || []).map(note => String(note.Id || '')));
+  let addedNotes = 0;
+  for (const row of careRows) {
+    if (!row.Note) continue;
+    const noteId = `CARE-LUONG-${row.Source.replace(/[^a-zA-Z0-9]/g, '')}-${row.Row}`;
+    if (noteIds.has(noteId)) continue;
+    data.CustomerNotes.push({ Id: noteId, Phone: row.Phone, Text: row.Note, Date: row.Date, Source: `${row.Source} | Lương` });
+    noteIds.add(noteId);
+    addedNotes++;
+  }
+  return { rawRows: careRows.length, uniqueContacts: latestByPhone.size, addedCustomers, addedNotes };
+}
 function buildSummary(orders) { const daily=[], bySale=[], owners=['Thu','Chang','Lương','Phương','Thùy','Mỹ Anh','Tuyết'], dates=orders.map(o=>o.Date).filter(Boolean).sort(), start=dates[0]||new Date().toISOString().slice(0,10), end=dates[dates.length-1]||start; for(let time=new Date(`${start}T00:00:00Z`).getTime();time<=new Date(`${end}T00:00:00Z`).getTime();time+=86400000){const date=new Date(time).toISOString().slice(0,10); for(const owner of [null,...owners]){const rows=orders.filter(o=>o.Date===date&&(!owner||o.Owner===owner)), returns=rows.filter(o=>o.Status==='Hoàn'||o.Status==='Hủy'), valid=rows.filter(o=>o.Status!=='Hoàn'&&o.Status!=='Hủy'), fresh=rows.filter(o=>o.Type==='Khách mới'), old=rows.filter(o=>o.Type==='Khách cũ'); const item={Date:date,Data:null,NewOrders:fresh.length,OldOrders:old.length,NewRevenue:total(fresh,'Amount'),OldRevenue:total(old,'Amount'),ReturnCount:returns.length,ReturnRevenue:total(returns,'Amount'),NetRevenue:total(valid,'Amount'),OrderCount:rows.length}; if(owner) bySale.push({...item,Owner:owner}); else daily.push(item); }} return {Source:'VTG_lendon – đồng bộ đọc-only',DataNote:'Doanh thu khách mới/cũ là doanh thu gộp theo nhãn VTG_lendon; doanh thu sau hoàn được tính riêng.',LastImportedAt:new Date().toISOString(),Daily:daily,BySale:bySale}; }
 async function syncGoogle() {
   const results = await Promise.allSettled(sources.map(([owner, id]) => readSource(owner, id)));
+  const careResults = await Promise.allSettled(luongCareSources.map(readLuongCareSource));
   const failed = results.filter(result => result.status === 'rejected');
   const imported = results.filter(result => result.status === 'fulfilled').flatMap(result => result.value);
   if (!imported.length) {
@@ -233,9 +315,16 @@ async function syncGoogle() {
   data.Orders = [...pendingLocalOrders, ...imported];
   const phones = new Set();
   data.Customers = data.Orders.sort((a,b) => a.Date.localeCompare(b.Date)).filter(o => o.CustomerPhone && !phones.has(o.CustomerPhone) && (phones.add(o.CustomerPhone), true)).map(o => ({ ...existingCustomers.get(o.CustomerPhone), Id: `KH-${o.CustomerPhone}`, Name: o.CustomerName, Phone: o.CustomerPhone, Owner: o.Owner, Source: 'VTG_lendon', Note: existingCustomers.get(o.CustomerPhone)?.Note || '', Created: o.Date }));
+  // Giữ khách chăm sóc-only hiện hữu, rồi đọc lại ba tab chăm sóc của Lương.
+  const orderPhones = new Set(data.Customers.map(customer => String(customer.Phone)));
+  for (const customer of existingCustomers.values()) {
+    if (!orderPhones.has(String(customer.Phone))) data.Customers.push(customer);
+  }
+  const careRows = careResults.filter(result => result.status === 'fulfilled').flatMap(result => result.value);
+  const care = mergeLuongCareData(data, existingCustomers, careRows);
   data.ExternalSummary = buildSummary(data.Orders);
   writeData(data);
-  return { orders: imported.length, sales: results.length - failed.length, failed: failed.length };
+  return { orders: imported.length, sales: results.length - failed.length, failed: failed.length, care, careFailed: careResults.filter(result => result.status === 'rejected').length };
 }
 const reportSources={Thu:'1l0T4TKTQsSGOKntxeDqK8UJV6khh2Taka50ou35mFSY',Chang:'1-CA2qhRN2S4eDXuCV-znuDByfyStK7Tt_y9dOdqbph4',Lương:'1CJrdWnA291kYg9kgq_P9Xa_QfA4T0TTkVEIm7w46Nsk',Phương:'1SOeryGnc-8y-_QOFWkTxrmRYY0ui_BXGgA5dFPLYhSo',Thủy:'1aPrDB0H-a8geNZZeapIHaPuKmozej_v-aYL8u_DTaWc',Thùy:'1aPrDB0H-a8geNZZeapIHaPuKmozej_v-aYL8u_DTaWc','Mỹ Anh':'1ta8dH-SWJ88BGyR15pycpcEhb0DLHOc0QfU9O3nGmvo',Tuyết:'1ATC0glShD5jtmf7eE8KmtBUSHnI5a6uYw5OP70IGVPg'};
 async function syncReportSale(owner){if(owner==='Tất cả')return syncGoogle();const id=reportSources[owner];if(!id)throw new Error('Chưa có link Google Sheet của sale này.');const imported=await readSource(owner,id),data=readData();data.Orders=[...(data.Orders||[]).filter(o=>o.Owner!==owner),...imported];data.ExternalSummary=buildSummary(data.Orders);writeData(data);return {orders:imported.length,sales:1};}
