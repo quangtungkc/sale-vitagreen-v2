@@ -172,7 +172,9 @@ async function cancelOrderInSheetDirect(order) {
 async function sendGatewayRequest(action, order, customer, session) {
   const ownerKey = flat(order?.Owner).replace(/\s+/g, '');
   const recovered = LOCAL_GATEWAY_SESSIONS[ownerKey];
-  const effectiveSession = session?.username && session?.password ? session : recovered;
+  // Với sale đã được cấu hình sẵn trên Gateway, luôn dùng phiên chuẩn theo
+  // sale. Không dùng phiên cũ do một máy khác có thể đã lưu sai trong localStorage.
+  const effectiveSession = recovered || (session?.username && session?.password ? session : null);
   if (!effectiveSession?.username || !effectiveSession?.password) {
     throw new Error('Phiên đăng nhập không hợp lệ. Hãy đăng xuất và đăng nhập lại.');
   }
